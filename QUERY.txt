@@ -1,0 +1,216 @@
+#ICEBERG DEMO ALL FEATURES
+
+#CREATE DATABASE
+CREATE DATABASE IF NOT EXISTS iceberg_demo_l0;
+CREATE DATABASE IF NOT EXISTS iceberg_demo_l1;
+
+#CREATE TABLE
+CREATE EXTERNAL TABLE iceberg_demo_l0.trans_v0
+(
+trans_id string,
+account_id string,
+`date` string,
+`type` string,
+operation string,
+amount string,
+balance string,
+k_symbol string,
+bank string
+)
+row format delimited
+fields terminated by ','
+stored as textfile
+location 's3a://se-indo-demo-datasets/trans_v0/';
+
+CREATE EXTERNAL TABLE iceberg_demo_l0.trans_v1
+(
+trans_id string,
+account_id string,
+`date` string,
+`type` string,
+operation string,
+amount string,
+balance string,
+k_symbol string,
+bank string,
+account string
+)
+row format delimited
+fields terminated by ','
+stored as textfile
+location 's3a://se-indo-demo-datasets/trans_v1/';
+
+CREATE EXTERNAL TABLE iceberg_demo_l0.trans_v2
+(
+trans_id string,
+account_id string,
+`date` string,
+`type` string,
+operation string,
+amount string,
+balance string,
+k_symbol string,
+bank string,
+account string
+)
+row format delimited
+fields terminated by ','
+stored as textfile
+location 's3a://se-indo-demo-datasets/trans_v2/';
+
+CREATE TABLE iceberg_demo_l1.trans
+(
+trans_id int,
+account_id int,
+`date` string,
+`type` string,
+operation string,
+amount decimal(32,4),
+balance decimal(32,4),
+k_symbol string,
+bank string
+)
+stored by iceberg
+TBLPROPERTIES ('format-version' = '2');
+
+#INSERT DATA FROM L0 TO L1
+INSERT INTO iceberg_demo_l1.trans
+select
+cast(trans_id as int) as trans_id,
+cast(account_id as int) as account_id,
+`date`,
+type,
+operation,
+cast (amount as decimal(32,4)) as amount,
+cast (balance as decimal(32,4)) as balance,
+k_symbol,
+bank
+from iceberg_demo_l0.trans_v0
+
+#SELECT DATA
+SELECT *
+FROM iceberg_demo_l1.trans
+
+#ADD COLUMNS TO TRANS TABLE
+ALTER TABLE iceberg_demo_l1.trans ADD COLUMNS (account STRING)
+
+#INSERT NEW DATA TO TRANS TABLE
+INSERT INTO iceberg_demo_l1.trans
+select
+cast(trans_id as int) as trans_id,
+cast(account_id as int) as account_id,
+`date`,
+type,
+operation,
+cast (amount as decimal(32,4)) as amount,
+cast (balance as decimal(32,4)) as balance,
+k_symbol,
+bank,
+account
+from iceberg_demo_l0.trans_v1
+
+#QUERY NEW DATA
+SELECT *
+FROM iceberg_demo_l1.trans
+where length(account) > 1
+
+#CHECK TABLE HISTORY <IMPALA>
+DESCRIBE HISTORY iceberg_demo_l1.trans;
+
+#SELECT FROM OLDER VERSION
+SELECT *
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_TIME AS OF '<creation_time>';
+
+SELECT *
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_VERSION AS OF '<snapshot_id>';
+
+#ROW COUNT EACH VERSION
+SELECT COUNT(*)
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_TIME AS OF '<creation_time>'
+UNION ALL
+SELECT COUNT(*)
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_VERSION AS OF '<snapshot_id>';
+
+#ADD PARTITION TO EXISTING TABLE
+ALTER TABLE iceberg_demo_l1.trans
+SET PARTITION SPEC (truncate(2,`date`))
+
+#INSERT NEW DATA TO TABLE
+INSERT INTO iceberg_demo_l1.trans
+select
+cast(trans_id as int) as trans_id,
+cast(account_id as int) as account_id,
+`date`,
+type,
+operation,
+cast (amount as decimal(32,4)) as amount,
+cast (balance as decimal(32,4)) as balance,
+k_symbol,
+bank,
+account
+from iceberg_demo_l0.trans_v1
+
+#CHECK TABLE HISTORY
+DESCRIBE HISTORY iceberg_demo_l1.trans;
+
+#CHECK ROW COUNT BETWEEN VERSION
+SELECT COUNT(*)
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_TIME AS OF '<creation_time>'
+UNION ALL
+SELECT COUNT(*)
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_TIME AS OF '<creation_time>'
+UNION ALL
+SELECT COUNT(*)
+FROM iceberg_demo_l1.trans
+FOR SYSTEM_TIME AS OF '<creation_time>'
+
+#UPSERT DATA
+MERGE INTO iceberg_demo_l1.trans as trans USING (SELECT * FROM iceberg_demo_l0.trans_v2) trans_v2 ON trans_v2.trans_id = trans.trans_id
+	WHEN MATCHED THEN UPDATE SET amount = trans_v2.amount, balance = trans_v2.balance
+	WHEN NOT MATCHED THEN INSERT VALUES (trans_v2.trans_id,trans_v2.account_id,trans_v2.`date`,trans_v2.`type`,trans_v2.operation,trans_v2.amount,trans_v2.balance,trans_v2.k_symbol,trans_v2.bank,trans_v2.account);
+
+#SELECT UPSERT RESULT
+describe history iceberg_demo_l1.trans;
+
+#UPDATED DATA
+select "AFTER_UPSERT",* from iceberg_demo_l1.trans where trans_id=695247
+UNION ALL
+select "BEFORE_UPSERT",* from iceberg_demo_l1.trans FOR SYSTEM_TIME AS OF '<creation_time>' where trans_id=695247
+
+#NEW DATA
+select "AFTER_UPSERT",* from iceberg_demo_l1.trans where trans_id=1110516123
+UNION ALL
+select "BEFORE_UPSERT",* from iceberg_demo_l1.trans FOR SYSTEM_TIME AS OF '<creation_time>' where trans_id=1110516123 
+
+#DELETE DATA
+select * from iceberg_demo_l1.trans where trans_id=1110516123;
+DELETE from iceberg_demo_l1.trans where trans_id=1110516123;
+select * from iceberg_demo_l1.trans where trans_id=1110516123;
+
+#ROLLBACK TABLE
+ALTER TABLE iceberg_demo_l1.trans EXECUTE ROLLBACK(<snapshot_id>); 
+
+#SNAPSHOT MANAGEMENT
+ALTER TABLE iceberg_demo_l1.trans EXECUTE SET_CURRENT_SNAPSHOT (<snapshot_id>)
+
+#CREATE L0 TABLE AS PARQUET
+CREATE EXTERNAL TABLE iceberg_demo_l0.trans_v3
+STORED AS PARQUET
+AS
+SELECT * FROM iceberg_demo_l0.trans_v1
+
+#QUERY TABLE
+SELECT * FROM iceberg_demo_l0.trans_v3
+order by trans_id
+
+#MIGRATE TABLE TO ICEBERG
+ALTER TABLE iceberg_demo_l0.trans_v3 CONVERT TO ICEBERG;
+ALTER TABLE iceberg_demo_l0.trans_v3 SET TBLPROPERTIES ('format-version' = '2');
+
+#CLEAN UP
